@@ -1,7 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Security.Claims;
+using System.Text;
 using System.Threading.Tasks;
 using CarHelp.WebApi.DbContext;
 using CarHelp.WebApi.Models;
@@ -9,6 +12,8 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
+using Microsoft.IdentityModel.Tokens;
 
 namespace CarHelp.WebApi.Controllers
 {
@@ -16,37 +21,39 @@ namespace CarHelp.WebApi.Controllers
     public class AccountController : Controller
     {
         private readonly UserManager<ApplicationUser> _userManager;
-        private readonly SignInManager<ApplicationUser> _signInManager;
-        public AccountController(UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager)
+        private readonly IPasswordHasher<ApplicationUser> _passwordHasher;
+        private readonly IConfiguration _configuration;
+        public AccountController(IConfiguration configuration, UserManager<ApplicationUser> userManager, IPasswordHasher<ApplicationUser> passwordHasher)
         {
-             _userManager = userManager;
-            _signInManager = signInManager;
+            _configuration=configuration;
+            _userManager = userManager;
+            _passwordHasher = passwordHasher;
         }
 
 
         [Route("login")]
         [HttpPost]
-        public async Task<string> PostAsync([FromBody]LoginDTO model)
+        public async Task<IActionResult> PostAsync([FromBody]LoginDTO model)
         {
-            if (ModelState.IsValid)
+            var user = await _userManager.FindByNameAsync(model.Email);
+ 
+            if (user == null || _passwordHasher.VerifyHashedPassword(user, user.PasswordHash, model.Password) != PasswordVerificationResult.Success)
             {
-                var user = await _userManager.FindByEmailAsync(model.Email);
-                if (user==null || !await _userManager.CheckPasswordAsync(user, model.Password))
-                {
-                    return "Неправильный логин и (или) пароль";
-                }
-                else{
-                    await _signInManager.PasswordSignInAsync(model.Email, model.Password, false, false);
-                    return "OK";
-                }
+                return BadRequest();
             }
-            else
-                return "Error model";
+            var token = await GetJwtSecurityToken(user);
+ 
+            return Ok(new
+            {
+                token = new JwtSecurityTokenHandler().WriteToken(token),
+                expiration = token.ValidTo
+            });
+              
         }
 
         [Route("register")]
         [HttpPost]
-        public async Task<string> PostAsync([FromBody]RegisterDTO model)
+        public async Task<IActionResult> PostAsync([FromBody]RegisterDTO model)
         {
             ApplicationUser user = new ApplicationUser { Email = model.Email, UserName = model.Email};
                 // добавляем пользователя
@@ -54,20 +61,28 @@ namespace CarHelp.WebApi.Controllers
             if (result.Succeeded)
             {
                 // установка куки
-                await _signInManager.SignInAsync(user, false);
-                return "OK";
+                return Ok();
             }
             else{
-                return result.Errors.FirstOrDefault().Description;
+                return BadRequest(result.Errors.FirstOrDefault().Description);
             }
         }
 
-        [Route("lodout")]
-        [HttpPost]
-        public async Task<string> PostAsync()
+        private async Task<JwtSecurityToken> GetJwtSecurityToken(ApplicationUser user)
         {
-            await _signInManager.SignOutAsync();
-            return "successful";
+            var userClaims =  await _userManager.GetClaimsAsync(user);
+            Debug.WriteLine("dfdf" + userClaims);
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JwtKey"]));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+            
+            return new JwtSecurityToken(
+                issuer: _configuration["JwtIssuer"],
+                audience: _configuration["JwtIssuer"],
+                notBefore: DateTime.UtcNow,
+                claims: userClaims,
+                expires: DateTime.UtcNow.AddMinutes(Convert.ToDouble(_configuration["JwtExpireMin"])),
+                signingCredentials: creds
+            );
         }
     }
     public class LoginDTO{

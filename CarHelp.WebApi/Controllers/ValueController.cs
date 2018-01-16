@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,7 +11,8 @@ namespace CarHelp.WebApi.Controllers
         [HttpGet]
         public string Get()
         {
-            return User.Identity.Name;
+            Debug.WriteLine("OK");
+            return "OK";
         }
     }
 }
